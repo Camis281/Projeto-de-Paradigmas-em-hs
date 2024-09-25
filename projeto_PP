@@ -1,0 +1,456 @@
+--{-# OPTIONS_GHC -Wno-incomplete-patterns #-}
+import System.Directory (doesFileExist)
+import System.Exit (exitSuccess)
+import System.IO
+import Data.Maybe (listToMaybe)
+import Control.Monad (when)
+
+-- Define um novo tipo Cliente, que é um wrapper para uma String
+data Cliente = Cliente
+  { getCliente :: String,               -- Função para extrair o nome do Cliente
+    cpf :: String,                      -- CPF é único no sistema
+    email :: String,                    -- Email único no sistema
+    username :: String,                 -- Username é único no sistema
+    senha :: String                     -- Senha utilizada para login, no mínimo 8 char
+  }
+  deriving (Show, Eq, Read)
+
+-- Define o tipo Produto, que contém um Nome e um Preço
+data Produto = Produto
+  { getIdProduto :: Int,                 -- Id do produto
+    nomeProduto :: String,               -- Nome do produto (String)
+    precoProduto :: Preco,               -- Preço do produto (Float)
+    descricaoProduto :: String           -- Descrição do produto (String)
+  }
+  deriving (Show, Eq, Read)
+
+-- Define o tipo Item, que contém um Produto e uma Quantidade
+data Item = Item
+  { produtoItem :: Produto,              -- Produto associado ao item
+    quantidadeItem :: Quantidade         -- Quantidade do produto (Int)
+  }
+  deriving (Show, Eq, Read)
+
+-- Define o tipo Pedido, que contém um Cliente e uma ListaCompras
+data Pedido = Pedido
+  { getIdPedido :: Int,                  -- ID do pedido (Int)
+    clientePedido :: Cliente,            -- Cliente que fez o pedido
+    listaComprasPedido :: ListaCompras,  -- Lista de itens no pedido
+    formaPagamento :: String             -- Forma de pagamento (String)
+  }
+  deriving (Show, Eq, Read)
+
+data Sistema = Sistema
+  { pedidos :: [Pedido],                 -- Lista de pedidos
+    clientes :: [Cliente],               -- Clientes cadastrados no sistema 
+    produtos :: [Produto]                -- Produtos cadastrados no sistema
+  } deriving (Show, Eq, Read)
+
+-- Define tipos sinônimos para maior clareza e legibilidade
+type Preco = Float
+type Quantidade = Int
+type ListaCompras = [Item]
+
+-- Criar administradores (O adm é fixo)
+adminUsername :: String
+adminUsername = "admin"
+
+adminPassword :: String
+adminPassword = "admin123"
+
+-- Função principal que é o ponto de entrada do programa
+main :: IO ()
+main = carregarSistema >>= menuLogin
+
+-- Função auxiliar que verifica as credenciais do cliente
+autenticarCliente :: String -> String -> Sistema -> Maybe Cliente
+autenticarCliente user pass sistema =
+  listToMaybe [cliente | cliente <- clientes sistema, user == username cliente, pass == senha cliente]
+
+-- Criar um menu login para verificar se é o cliente ou o admin
+menuLogin :: Sistema -> IO ()
+menuLogin sistema = do
+  putStrLn "\n"
+  putStrLn "|-------------------|"
+  putStrLn "| Sistema de login  |"  
+  putStrLn "|-------------------|"
+  putStr "Username: "
+  usernameLogin <- getLine
+  putStr "Senha: "
+  password <- getLine
+  
+  if usernameLogin == adminUsername && password == adminPassword
+    then menuAdmin sistema
+    else case autenticarCliente usernameLogin password sistema of
+      Just cliente -> menuCliente sistema cliente
+      Nothing -> do
+        putStr "Username ou senha incorretos."
+        menuLogin sistema
+
+-- Função para mostrar o menu do admin
+menuAdmin :: Sistema -> IO ()
+menuAdmin sistema = do
+  putStrLn "\n"
+  putStrLn "|---------------------------------|"
+  putStrLn "|       Menu Administrador        |"
+  putStrLn "|---------------------------------|"
+  putStrLn "| 1 - Cadastrar cliente           |"
+  putStrLn "| 2 - Buscar Cliente (CPF)        |"
+  putStrLn "| 3 - Cadastrar produto           |"
+  putStrLn "| 4 - Buscar produto              |"
+  putStrLn "| 5 - Buscar compras de cliente   |"
+  putStrLn "| 6 - Histórico de compras geral  |"
+  putStrLn "| 7 - Saldo total vendido         |"
+  putStrLn "| 8 - Listar Produtos disponiveis |"
+  putStrLn "|---------------------------------|"
+  putStrLn "| 0 - Sair                        |"
+  putStrLn "|---------------------------------|"
+  putStr "Opção: "
+
+  opcao <- getLine
+  case opcao of
+    "1" -> cadastrarCliente sistema
+    "2" -> buscarCliente sistema
+    "3" -> cadastrarProduto sistema
+    "4" -> buscarProduto sistema
+    "5" -> historicoComprasCliente sistema
+    "6" -> historicoCompras sistema
+    "7" -> imprimirTotal sistema
+    "8" -> listarProdutos sistema >> menuAdmin sistema
+    "0" -> salvarSistema sistema >> putStrLn "Saindo..." >> exitSuccess
+    _ -> putStrLn "Opção inválida!" >> menuAdmin sistema
+
+-- Função que exibe o menu do cliente
+menuCliente :: Sistema -> Cliente -> IO ()
+menuCliente sistema cliente = do
+  putStrLn "\n"
+  putStrLn "|--------------------------|"
+  putStrLn "|       Menu Cliente       |"
+  putStrLn "|--------------------------|"
+  putStrLn "| 1 - Iniciar compra       |"
+  putStrLn "| 2 - Histórico de compras |"
+  putStrLn "| 0 - Sair                 |"
+  putStrLn "|--------------------------|"
+  putStr "Opção: "
+
+  opcao <- getLine
+  case opcao of
+    "1" -> iniciarCompra cliente sistema
+    "2" -> consultarCompras cliente sistema
+    "0" -> salvarSistema sistema >> putStrLn "Saindo..." >> exitSuccess
+    _ -> putStrLn "Opção inválida!" >> menuCliente sistema cliente
+
+--------------------------------------------------------------
+----------------- FUNCÕES DO MENU DO CLIENTE -----------------
+--------------------------------------------------------------
+
+-- Função que inicia o processo de compra
+iniciarCompra :: Cliente -> Sistema -> IO ()
+iniciarCompra cliente sistema = do  
+  let idPedido = if null (pedidos sistema) then 1 else maximum (map getIdPedido (pedidos sistema)) + 1
+  let pedido = Pedido { getIdPedido = idPedido, clientePedido = cliente, listaComprasPedido = [], formaPagamento = "PENDENTE" }
+  menuCompra pedido sistema
+
+-- Função que consulta compras de um cliente
+consultarCompras :: Cliente -> Sistema -> IO ()
+consultarCompras cliente sistema = do
+  let pedidosCliente = filter (\pedido -> clientePedido pedido == cliente) (pedidos sistema)
+  if null pedidosCliente 
+    then putStrLn "Nenhum pedido encontrado para esse cliente." 
+    else do 
+      putStrLn "\n"
+      exibirPedidos pedidosCliente
+  menuCliente sistema cliente
+
+-- Função que exibe o menu de compra e processa a entrada do usuário
+menuCompra :: Pedido -> Sistema -> IO ()
+menuCompra pedido sistema = do
+  --putStrLn "\nProdutos disponíveis para comprar:\n"
+  --exibirProdutos $ produtos sistema
+  
+  putStrLn "|-------------------------------------------------|"
+  putStrLn "|                Menu de Compra                   |"
+  putStrLn "|-------------------------------------------------|"
+  putStrLn "| 1 - Adicionar item ao pedido                    |"
+  putStrLn "| 2 - Finalizar e realizar pagamento              |"
+  putStrLn "| 3 - Itens do pedido e subtotal                  |"
+  putStrLn "| 4 - Listar Produtos disponiveis                 |"
+  putStrLn "| 0 - Voltar ao menu principal (cancela a compra) |"
+  putStrLn "|-------------------------------------------------|"
+  putStr "Opção: "
+
+  opcao <- getLine
+  case opcao of
+    "1" -> adicionarItem pedido sistema
+    "2" -> finalizarCompra pedido sistema
+    "3" -> vizualizarItens pedido sistema
+    "4" -> listarProdutosDisponiveis sistema >> menuCompra pedido sistema
+    "0" -> salvarSistema sistema >> putStrLn "Voltando ao menu principal..." >> menuCliente sistema (clientePedido pedido)
+    _ -> putStrLn "Opção inválida!" >> menuCompra pedido sistema
+
+-------------------------------------------------------------
+----------------- FUNÇÕES DO MENU DE COMPRA -----------------
+-------------------------------------------------------------
+
+-- Função para listar todos os produtos disponíveis
+listarProdutosDisponiveis :: Sistema -> IO ()
+listarProdutosDisponiveis sistema = do
+    putStrLn "\nProdutos disponíveis:\n"
+    exibirProdutos $ produtos sistema
+
+-- Função para adicionar Item ao Pedido
+adicionarItem :: Pedido -> Sistema -> IO ()
+adicionarItem pedido sistema = do
+  putStrLn $ "ID do pedido atual: " ++ show (getIdPedido pedido)
+  putStr "Digite o nome do produto: "
+  nome <- getLine
+  putStr "Digite a quantidade do produto: "
+  quantidade <- readLn
+  
+  when (quantidade <= 0) $ do
+    putStrLn "Quantidade inválida!"
+    adicionarItem pedido sistema
+  
+  let produtoEncontrado = listToMaybe (filter (\p -> nome == nomeProduto p) (produtos sistema))
+
+  case produtoEncontrado of
+    Just produto -> do
+      let item = Item { produtoItem = produto, quantidadeItem = quantidade }
+      let pedidoAtualizado = Pedido { getIdPedido = getIdPedido pedido, clientePedido = clientePedido pedido, listaComprasPedido = listaComprasPedido pedido ++ [item], formaPagamento = formaPagamento pedido }
+      let pedidosAtualizados = filter (\p -> getIdPedido p /= getIdPedido pedido) (pedidos sistema) ++ [pedidoAtualizado]
+      let sistemaAtualizado = Sistema { pedidos = pedidosAtualizados, clientes = clientes sistema, produtos = produtos sistema }
+      putStrLn "Item adicionado ao pedido com sucesso!"
+      menuCompra pedidoAtualizado sistemaAtualizado
+    Nothing -> putStrLn "Produto não encontrado!" >> adicionarItem pedido sistema
+
+-- Função para finalizar a compra e realizar o pagamento
+finalizarCompra :: Pedido -> Sistema -> IO ()
+finalizarCompra pedido sistema = do
+  -- CHECAR SE A COMPRA NÃO ESTÁ VAZIA
+  if null (listaComprasPedido pedido)
+    then do
+      putStrLn "Nenhum item adicionado ao pedido. Não é possível finalizar."
+      menuCompra pedido sistema
+    else do
+      putStrLn "\n"
+  
+  putStrLn "|------------------------|"
+  putStrLn "|  Formas de pagamento   |"
+  putStrLn "|------------------------|"
+  putStrLn "| 1 - Cartão de crédito  |"
+  putStrLn "| 2 - Cartão de débito   |"
+  putStrLn "| 3 - Pix                |"
+  putStrLn "|------------------------|"
+  putStr "Opção: "
+  
+  opcaoPagamento <- getLine
+  let formaPagamentoEscolhida = case opcaoPagamento of
+        "1" -> "Cartão de crédito"
+        "2" -> "Cartão de débito"
+        "3" -> "Pix"
+        _ -> "Forma de pagamento inválida"
+  
+  let pedidoFinalizado = pedido { formaPagamento = formaPagamentoEscolhida }
+  let pedidosAtualizados = filter (\p -> getIdPedido p /= getIdPedido pedido) (pedidos sistema) ++ [pedidoFinalizado]
+  let sistemaAtualizado = sistema { pedidos = pedidosAtualizados }
+
+  putStrLn $ "Compra finalizada com sucesso! Forma de pagamento: " ++ formaPagamentoEscolhida
+  salvarSistema sistemaAtualizado
+  menuCliente sistemaAtualizado (clientePedido pedido)
+
+-- Função para visualizar os itens do pedido atual
+vizualizarItens :: Pedido -> Sistema -> IO ()
+vizualizarItens pedido sistema = do
+  putStrLn "\nItens no pedido:\n"
+  mapM_ (\item -> putStrLn $ show (quantidadeItem item) ++ "x " ++ nomeProduto (produtoItem item) ++ " - R$" ++ show (precoProduto (produtoItem item))) (listaComprasPedido pedido)
+  let subtotal = sum (map (\item -> fromIntegral (quantidadeItem item) * precoProduto (produtoItem item)) (listaComprasPedido pedido))
+  putStrLn $ "\nSubtotal: R$" ++ show subtotal
+  menuCompra pedido sistema
+
+--------------------------------------------------------------------
+----------------- FUNÇÕES DO MENU DO ADMINISTRADOR -----------------
+--------------------------------------------------------------------
+
+-- Função para cadastrar um cliente
+cadastrarCliente :: Sistema -> IO ()
+cadastrarCliente sistema = do
+  putStr "Nome do Cliente: "
+  nomeCliente <- getLine
+  putStr "CPF: "
+  cpfCliente <- getLine
+
+  -- Validação do CPF
+  let cpfCadastrado = any (\cliente -> cpfCliente == cpf cliente) (clientes sistema)
+  if cpfCadastrado
+    then putStrLn "CPF já cadastrado!" >> cadastrarCliente sistema
+    else if length cpfCliente /= 11 
+      then putStrLn "CPF inválido!" >> cadastrarCliente sistema
+      else putStrLn "CPF ok!"
+  
+  putStr "Email: "
+  emailCliente <- getLine
+
+  -- Checar se o email é único no sistema
+  let emailCadastrado = any (\cliente -> emailCliente == email cliente) (clientes sistema)
+  if emailCadastrado
+    then putStrLn "Email já cadastrado!" >> cadastrarCliente sistema
+    else putStrLn "Email ok!"
+  
+  putStr "Username: "
+  usernameCliente <- getLine
+
+  -- Checar se o username é único no sistema
+  let usernameCadastrado = any (\cliente -> usernameCliente == username cliente) (clientes sistema)
+  if usernameCadastrado 
+    then putStrLn "Username já cadastrado!" >> cadastrarCliente sistema
+    else putStrLn "Username ok!"
+  
+  putStr "Senha: "
+  senhaCliente <- getLine
+
+  -- Checar se a senha é maior que 8 caracteres
+  if length senhaCliente < 8
+    then putStrLn "Senha inválida!" >> cadastrarCliente sistema
+    else putStrLn "Senha ok!"
+  
+  let cliente = Cliente { getCliente = nomeCliente, cpf = cpfCliente, email = emailCliente, username = usernameCliente, senha = senhaCliente }
+  let sistemaAtualizado = Sistema { pedidos = pedidos sistema, clientes = clientes sistema ++ [cliente], produtos = produtos sistema }
+  putStrLn "Cliente cadastrado com sucesso!"
+  menuAdmin sistemaAtualizado
+
+-- Função para buscar um cliente pelo CPF
+buscarCliente :: Sistema -> IO ()
+buscarCliente sistema = do
+  putStr "Digite o CPF do cliente: "
+  cpfBusca <- getLine
+  let clienteEncontrado = listToMaybe (filter (\c -> cpfBusca == cpf c) (clientes sistema))
+  
+  case clienteEncontrado of
+    Just cliente -> do
+      putStrLn "\nCliente encontrado: "
+      exibirCliente cliente
+    Nothing -> putStrLn "Cliente não encontrado!"
+  
+  menuAdmin sistema
+
+-- Função para cadastrar um produto
+cadastrarProduto :: Sistema -> IO ()
+cadastrarProduto sistema = do
+  putStr "Nome do Produto: "
+  nome <- getLine
+  putStr "Preço do Produto: "
+  preco <- readLn
+  putStr "Descrição do Produto: "
+  descricao <- getLine
+  
+  let idProduto = if null (produtos sistema) then 1 else maximum (map getIdProduto (produtos sistema)) + 1
+  let produto = Produto { getIdProduto = idProduto, nomeProduto = nome, precoProduto = preco, descricaoProduto = descricao }
+  let sistemaAtualizado = Sistema { pedidos = pedidos sistema, clientes = clientes sistema, produtos = produtos sistema ++ [produto] }
+  
+  putStrLn "Produto cadastrado com sucesso!"
+  menuAdmin sistemaAtualizado
+
+-- Função para buscar um produto pelo nome
+buscarProduto :: Sistema -> IO ()
+buscarProduto sistema = do
+  putStr "Digite o nome do produto: "
+  nomeBusca <- getLine
+  let produtoEncontrado = listToMaybe (filter (\p -> nomeBusca == nomeProduto p) (produtos sistema))
+  
+  case produtoEncontrado of
+    Just produto -> do
+      putStrLn "\nProduto encontrado: "
+      exibirProdutos [produto]
+    Nothing -> putStrLn "Produto não encontrado!"
+  
+  menuAdmin sistema
+
+-- Função que exibe o histórico de compras de um cliente específico
+historicoComprasCliente :: Sistema -> IO ()
+historicoComprasCliente sistema = do
+  putStr "Digite o CPF do cliente: "
+  cpfBusca <- getLine
+  let clienteEncontrado = listToMaybe (filter (\c -> cpfBusca == cpf c) (clientes sistema))
+  
+  case clienteEncontrado of
+    Just cliente -> do
+      let pedidosCliente = filter (\p -> clientePedido p == cliente) (pedidos sistema)
+      if null pedidosCliente 
+        then putStrLn "Nenhum pedido encontrado para esse cliente." 
+        else do 
+          putStrLn "\n"
+          exibirPedidos pedidosCliente
+    Nothing -> putStrLn "Cliente não encontrado!"
+  
+  menuAdmin sistema
+
+-- Função que exibe o histórico de compras geral
+historicoCompras :: Sistema -> IO ()
+historicoCompras sistema = do
+  if null (pedidos sistema)
+    then putStrLn "Nenhum pedido registrado até agora."
+    else do
+      putStrLn "\nHistórico de compras geral:\n"
+      exibirPedidos (pedidos sistema)
+  
+  menuAdmin sistema
+
+-- Função que imprime o total vendido
+imprimirTotal :: Sistema -> IO ()
+imprimirTotal sistema = do
+  let totalVendido = sum (map (\pedido -> sum (map (\item -> fromIntegral (quantidadeItem item) * precoProduto (produtoItem item)) (listaComprasPedido pedido))) (pedidos sistema))
+  putStrLn $ "Total vendido: R$" ++ show totalVendido
+  menuAdmin sistema
+
+-- Função para exibir os produtos cadastrados no sistema
+listarProdutos :: Sistema -> IO ()
+listarProdutos sistema = do
+  putStrLn "\nProdutos disponíveis:\n"
+  exibirProdutos $ produtos sistema
+  menuAdmin sistema
+
+------------------------------------------------------
+----------------- FUNÇÕES AUXILIARES -----------------
+------------------------------------------------------
+
+-- Função auxiliar que exibe uma lista de pedidos
+exibirPedidos :: [Pedido] -> IO ()
+exibirPedidos pedidosCadastrados = do
+  mapM_ (\pedido -> do
+    putStrLn $ "Pedido ID: " ++ show (getIdPedido pedido)
+    putStrLn $ "Cliente: " ++ getCliente (clientePedido pedido)
+    putStrLn "Itens:"
+    mapM_ (\item -> putStrLn $ "Quantidade: " ++ show (quantidadeItem item) ++ "x - " ++ nomeProduto (produtoItem item) ++ " - R$" ++ show (precoProduto (produtoItem item))) (listaComprasPedido pedido)
+    putStrLn $ "Forma de pagamento: " ++ formaPagamento pedido
+    putStrLn "\n") pedidosCadastrados
+
+-- Função auxiliar que exibe uma lista de produtos
+exibirProdutos :: [Produto] -> IO ()
+exibirProdutos produtosCadastrados = do
+  if null produtosCadastrados
+    then putStrLn "Nenhum produto cadastrado."
+    else mapM_ (\produto -> putStrLn $ show (getIdProduto produto) ++ " - " ++ nomeProduto produto ++ " - R$" ++ show (precoProduto produto) ++ " - " ++ descricaoProduto produto) produtosCadastrados
+
+-- Função auxiliar para exibir informações de um cliente
+exibirCliente :: Cliente -> IO ()
+exibirCliente cliente = do
+  putStrLn $ "Nome: " ++ getCliente cliente 
+  putStrLn $ "CPF: " ++ cpf cliente
+  putStrLn $ "Email: " ++ email cliente
+  putStrLn $ "Username: " ++ username cliente
+
+-- Função para carregar o sistema de um arquivo
+carregarSistema :: IO Sistema
+carregarSistema = do
+  existeArquivo <- doesFileExist "sistema.txt"
+  if existeArquivo
+    then do
+      conteudo <- readFile "sistema.txt"
+      return (read conteudo)
+    else return (Sistema [] [] [])
+
+-- Função para salvar o sistema em um arquivo
+salvarSistema :: Sistema -> IO ()
+salvarSistema sistema = do
+  writeFile "sistema.txt" (show sistema)
+  putStrLn "Sistema salvo com sucesso!"
